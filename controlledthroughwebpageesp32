@@ -1,0 +1,164 @@
+<!--this code controls the led pin 2 from the webpage and also update the led status on it from the websocket. here esp32 will work as a websocket server and browser acts like websocket client -->
+<!DOCTYPE HTML>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP WebSocket Server</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 text-gray-900 font-sans">
+
+  <div class="bg-teal-800 p-6 text-center">
+    <h1 class="text-white text-3xl">ESP WebSocket Server</h1>
+  </div>
+
+  <div class="max-w-xl mx-auto p-4">
+    <div class="bg-white shadow-lg rounded-lg p-6">
+      <h2 class="text-xl font-bold text-teal-700">Output - GPIO 2</h2>
+      <p class="text-lg font-medium text-gray-600">State: <span id="state" class="text-teal-600">OFF</span></p>
+      <button id="button" class="mt-4 bg-teal-600 text-white py-2 px-6 rounded-md hover:bg-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400">
+        Toggle
+      </button>
+    </div>
+  </div>
+
+  <script>
+    var gateway = `ws://${window.location.hostname}/ws`;
+    var websocket;
+
+    window.addEventListener('load', onLoad);
+
+    // Establish WebSocket connection
+    function initWebSocket() {
+      console.log('Trying to open a WebSocket connection...');
+      websocket = new WebSocket(gateway);
+      websocket.onopen    = onOpen;
+      websocket.onclose   = onClose;
+      websocket.onmessage = onMessage;
+    }
+
+    function onOpen(event) {
+      console.log('Connection opened');
+    }
+
+    function onClose(event) {
+      console.log('Connection closed');
+      setTimeout(initWebSocket, 2000);
+    }
+
+    // Handle incoming message
+    function onMessage(event) {
+      var state = event.data === "1" ? "ON" : "OFF";
+      document.getElementById('state').innerHTML = state;
+    }
+
+    // Handle button click to toggle state
+    function toggle() {
+      websocket.send('toggle');
+    }
+
+    // Initialize WebSocket and button
+    function onLoad(event) {
+      initWebSocket();
+      document.getElementById('button').addEventListener('click', toggle);
+    }
+  </script>
+
+</body>
+</html>
+
+// this is my esp32 code works as a websocket server
+// Import required libraries
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+
+// Replace with your network credentials
+const char* ssid = "REPLACE_WITH_YOUR_SSID";
+const char* password = "REPLACE_WITH_YOUR_PASSWORD";
+
+bool ledState = 0;
+const int ledPin = 2;
+
+// Create AsyncWebServer object on port 80
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+
+void notifyClients() {
+  ws.textAll(String(ledState));
+}
+
+void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
+  AwsFrameInfo *info = (AwsFrameInfo*)arg;
+  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+    data[len] = 0;
+    if (strcmp((char*)data, "toggle") == 0) {
+      ledState = !ledState;
+      notifyClients();
+    }
+  }
+}
+
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
+             void *arg, uint8_t *data, size_t len) {
+  switch (type) {
+    case WS_EVT_CONNECT:
+      Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
+      break;
+    case WS_EVT_DISCONNECT:
+      Serial.printf("WebSocket client #%u disconnected\n", client->id());
+      break;
+    case WS_EVT_DATA:
+      handleWebSocketMessage(arg, data, len);
+      break;
+    case WS_EVT_PONG:
+    case WS_EVT_ERROR:
+      break;
+  }
+}
+
+void initWebSocket() {
+  ws.onEvent(onEvent);
+  server.addHandler(&ws);
+}
+
+String processor(const String& var){
+  if(var == "STATE"){
+    if (ledState){
+      return "ON";
+    }
+    else{
+      return "OFF";
+    }
+  }
+  return String();
+}
+
+void setup(){
+  // Serial port for debugging purposes
+  Serial.begin(115200);
+
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, LOW);
+  
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi..");
+  }
+
+  // Print ESP Local IP Address
+  Serial.println(WiFi.localIP());
+
+  initWebSocket();
+
+  // Start server
+  server.begin();
+}
+
+void loop() {
+  ws.cleanupClients();
+  digitalWrite(ledPin, ledState);
+}
